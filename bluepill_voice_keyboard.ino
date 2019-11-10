@@ -1,23 +1,28 @@
 #include <USBComposite.h> // for usb keyboard emulation
-#include "cb.h"
+#include "codebook.h"
+#include "phoneme_to_keystroke.h"
+
+#define DEVMODE 1 // dev-mode enabled? 0 or 1.
 
 #define WINDOW 240
 #define N 80
 #define ORDER 10
+#define MAXSAMPLES 8000
 
-#define FFT 16
-#define FF2 9    
-int bin[FF2]={0,8,4,11,2,13,5,14,1};
+#define FFT 32
+#define FF2 15    
+int bin[FF2]={16, 8,24, 4,20,12,28, 2,18,10,26, 6,22,14,30};
 
 const int inputPin = 0;  // analog input pin PA0
-int8_t s[8000];  // audio sample buffer (roughly 1 second)
+int8_t s[MAXSAMPLES];  // audio sample buffer (roughly 1 second)
 int samples=0;
-double window[WINDOW],w[WINDOW],ave;
-double realtwiddle[16],imtwiddle[16];
-double R[ORDER+1];
-double k[ORDER+1];
-double a[ORDER+1];
+float window[WINDOW],w[WINDOW],ave;
+float realtwiddle[16],imtwiddle[16];
+float R[ORDER+1];
+float k[ORDER+1];
+float a[ORDER+1];
 char buffer[100];
+int enabled=0;
 
 USBHID HID;
 HIDKeyboard Keyboard(HID);
@@ -25,14 +30,14 @@ HIDKeyboard Keyboard(HID);
 //----------------------------------------------------------------------------------
 
 void autocorrelate(
-  double Sn[],  /* frame of Nsam windowed speech samples */
-  double Rn[],  /* array of P+1 autocorrelation coefficients */
+  float Sn[],  /* frame of Nsam windowed speech samples */
+  float Rn[],  /* array of P+1 autocorrelation coefficients */
   int Nsam, /* number of windowed samples to use */
   int order /* order of LPC analysis */
 )
 {
   int i,j;  /* loop variables */
-  double x;
+  float x;
 
   for(j=0; j<order+1; j++) {
     x = 0.0;
@@ -46,12 +51,12 @@ void autocorrelate(
 //----------------------------------------------------------------------------
 // Levinson-Durbin function based on Speex 1.0.5 lpc.c....
 void wld(
-    double       * lpc, /*      [0...p-1] LPC coefficients      */
-    const double * ac,  /*  in: [0...p] autocorrelation values  */
+    float       * lpc, /*      [0...p-1] LPC coefficients      */
+    const float * ac,  /*  in: [0...p] autocorrelation values  */
     int p
     )
 {
-   int i, j;  double r, error = ac[0];
+   int i, j;  float r, error = ac[0];
 
    for (i = 0; i < p; i++) {
 
@@ -65,7 +70,7 @@ void wld(
        */
       lpc[i] = r;
       for (j = 0; j < i/2; j++) {
-         double tmp  = lpc[j];
+         float tmp  = lpc[j];
          lpc[j]     += r * lpc[i-1-j];
          lpc[i-1-j] += r * tmp;
       }
@@ -76,9 +81,9 @@ void wld(
 }
 
 //----------------------------------------------------------------------
-void rootsofunity(double *realtwiddle, double *imtwiddle, unsigned int size)
+void rootsofunity(float *realtwiddle, float *imtwiddle, unsigned int size)
 {
-    double twopi = 6.28318530717959;
+    float twopi = 6.28318530717959;
     unsigned int n;
 
     for(n=1; n<(size>>1); n++)
@@ -89,10 +94,10 @@ void rootsofunity(double *realtwiddle, double *imtwiddle, unsigned int size)
 }
 
 //-----------------------------------------------------------------------
-void simple_fft(double *real, double *im, double *realtwiddle, double *imtwiddle, int size)
+void simple_fft(float *real, float *im, float *realtwiddle, float *imtwiddle, int size)
 {
     unsigned int even, odd, span, log=0, rootindex;    // indexes
-    double temp;
+    float temp;
     log=0;
     int i;
 
@@ -133,84 +138,118 @@ void simple_fft(double *real, double *im, double *realtwiddle, double *imtwiddle
 void process() {
   int i,n,b,c;
  
-  double real[FFT],imag[FFT];
-  double min,max,snr,prev;
+  float real[FFT],imag[FFT];
+  float e;
   int segments=1;
-  int m;
+  int min,max;
   int f[FF2];
-  int best,d,dist,bestdist;
-  char out[2],pho1=0,pho2=0;
+  int best,d,dist,bestdist,matches;
+  char result[10];
+  char dump[30];
+  char output[100];
+  int oplen=0;
+  int kscore[KEYS];
 
-    
+   output[0]=0;
    printf("\n--------------------\n\n");
    printf("segment %i\n",segments);
+   
    for (n=0; n<samples-WINDOW; n+=N) {
-   for (i=0; i<WINDOW; i++) w[i]=(double)s[i+n];
-   // run de-emphasis over the window area....
-   prev=0; for (i=0; i<WINDOW; i++) {w[i]+=prev/2; prev=w[i];}
-   ave=0; for (i=0; i<WINDOW; i++) ave+=w[i]; ave/=WINDOW;
-   for (i=0; i<WINDOW; i++) w[i]-=ave;
-   for (i=0; i<WINDOW; i++) w[i]*=window[i];
-   autocorrelate(w,R,WINDOW,ORDER);
-   wld(&a[1],R,ORDER); a[0]=1.0;
-   for (i=0; i<FFT; i++) {real[i]=0; imag[i]=0;}
-   for (i=0; i<=ORDER; i++) real[i]=a[i];
-   simple_fft(real,imag,realtwiddle,imtwiddle,FFT);
-   for (i=0; i<FF2; i++) {
-           b=bin[i];
-           w[i]=log(1.0/sqrt(real[b]*real[b]+imag[b]*imag[b]))*50.0;          
-    }
-    // find SNR....   
-    min=999999; for (i=0; i<FF2; i++) if (w[i]<min) min=w[i];
-    max=-1000; for (i=0; i<FF2; i++) if (w[i]>max) max=w[i];
-    snr=max-min; 
-         
-    // ignore low-SNR frames, otherwise normalize...
-    if (snr>100) {
-      for (i=0; i<FF2; i++) w[i]-=min;  
-    } else for (i=0; i<FF2; i++) w[i]=0;    
-
-    // find closest codebook match now.....
-    for (i=0; i<FF2; i++) f[i]=(int)w[i];
-    bestdist=999999;
+     for (i=0; i<WINDOW; i++) w[i]=(float)s[i+n];
+     // run de-emphasis over the window area....
+     for (i=WINDOW-1; i>0; i--)  w[i]=w[i]-w[i-1]*0.975;
+     // remove average....
+     ave=0; for (i=0; i<WINDOW; i++) ave+=w[i]; ave/=WINDOW;
+     for (i=0; i<WINDOW; i++) w[i]-=ave;
+     
+     for (i=0; i<WINDOW; i++) w[i]*=window[i]; // Hann window
+     autocorrelate(w,R,WINDOW,ORDER);
+     wld(&a[1],R,ORDER); a[0]=1.0;
+     e=0;for(i=0; i<=ORDER; i++) e+=a[i]*R[i]; if (e<0) e=0;
+     e=powf(e,0.16666666);
+     for (i=0; i<FFT; i++) {real[i]=0; imag[i]=0;}
+     for (i=0; i<=ORDER; i++) real[i]=a[i];
+     simple_fft(real,imag,realtwiddle,imtwiddle,FFT);
+     for (i=0; i<FF2; i++) {
+        b=bin[i];
+        w[i]=log(1.0/sqrt(real[b]*real[b]+imag[b]*imag[b]));
+	      w[i]=floor(w[i]*4.0+7.5);
+	      f[i]=(int)w[i]; 
+	      if (f[i]<0) f[i]=0;
+              if (f[i]>15) f[i]=15;	      
+     }
+     Serial.print(e); Serial.print("  ");
+     if (e<2.0) for (i=0; i<FF2; i++) f[i]=0; // ignore quiet frames
+ 
+    // search codebook for closest match(es)...
+    bestdist=99999999; matches=0;
     for (c=0; c<CBSIZE; c++) {
-      dist=0; for (i=0; i<FF2; i++) {d=f[i]-cb[c][i]; dist+=d*d;}
+      dist=0;
+      for (i=0; i<FF2; i++) {
+        d=0;
+        min=cb[c][i]/16; if (f[i]<min) d=min-f[i];
+	      max=cb[c][i]%16; if (f[i]>max) d=f[i]-max;
+        dist+=d*d;
+      }
+      if (dist==0) { // phoneme hit
+         result[matches]=cb[c][FF2]; matches++; result[matches]=0;
+         // next line prohibits plosives appearing after the first 3 frames...
+         if (n>N*5) if (cb[c][FF2]=='b' || cb[c][FF2]=='d' || cb[c][FF2]=='t') {matches--; result[matches]=0;}
+      }
       if (dist<bestdist) {bestdist=dist; best=c;}
     }
-    out[0]=cb[best][FF2]; out[1]=0;
-    if (bestdist<2000) {
-      if (pho1==0) pho1=cb[best][FF2];
-      else if (pho2==0 && cb[best][FF2]!=pho1) pho2=cb[best][FF2];
+    //Serial.print(matches); Serial.print("\n");
+    if (matches==0) {result[0]=cb[best][FF2]; result[1]=0;}
+    if (matches==1 ) {output[oplen]=result[0]; oplen++; output[oplen]=0;}
+    if (oplen>1) if (output[oplen-2]==output[oplen-1]) {oplen--; output[oplen]=0;}
+     
+    for (i=0; i<FF2; i++) if (f[i]<10) dump[i]=f[i]+'0'; else dump[i]=f[i]-10+'a';
+    dump[15]=0;
+    if (DEVMODE) {
+      Serial.print(dump); Serial.print("  ");
+      Serial.print(result); Serial.print("   "); Serial.print(bestdist);
+      Serial.print("\n");
     }
-    
-    for (i=0; i<FF2; i++) {Serial.print((int)w[i]); Serial.print(",");}
-    Serial.print(out); Serial.print("   "); Serial.print(bestdist);
-    Serial.print("\n");
   }
-  // lastly, generate keystroke based on pho1/pho2....
-  printf("pho1=%c, pho2=%c\n",pho1,pho2);
-  for (i=0; i<KEYS; i++) if (pho1==cbp[i][0])
-    if (cbp[i][1]==0 || pho2==cbp[i][1]) {
-      printf("MATCH = %c (%i)\n",cbp[i][2],i);
-      Keyboard.write(cbp[i][2]);
-    }
-    
+  // print output hits sequence....
+  Serial.print(output); Serial.print("\n");
   
-  Serial.print("--------------------------\n");// end-marker
+  // generate a score for each keystroke possibility...
+  for (i=0; i<KEYS; i++) {
+    kscore[i]=0;
+    for (n=0; n<oplen; n++) if (output[n]!=cbp[i][0]) kscore[i]--;
+    else {kscore[i]+=50; for (n++; n<oplen; n++) if (output[n]==cbp[i][1]) {kscore[i]+=50; n+=10;} else kscore[i]-=5;}
+    if (cbp[i][1]!=0 && kscore[i]<80) kscore[i]=0; 
+    if (cbp[i][1]==0 && kscore[i]>0) kscore[i]+=30; // balance up single-phoneme items
+  }
+  d=-100; for (i=0; i<KEYS; i++) if (kscore[i]>d) {d=kscore[i]; best=i;}
+  if (cbp[best][2]>2) {output[0]=cbp[best][2]; output[1]=0;}
+  else if (cbp[best][2]==0) {output[0]='o'; output[1]='f'; output[2]='f'; output[3]=0;}
+  else if (cbp[best][2]==1) {output[0]='o'; output[1]='n'; output[2]=0;}
+  if (DEVMODE) Serial.print(output); Serial.print("\n");
+
+  
+  // lastly, generate keystroke based on pho1/pho2....
+  if (!DEVMODE) {
+    if (cbp[best][2]==1) {enabled=1; digitalWrite(PB12, LOW);}
+    else if (cbp[best][2]==0) {enabled=0; digitalWrite(PB12, HIGH);}
+    else if (enabled) Keyboard.write(cbp[best][2]);
+  }    
+  
+  if (DEVMODE) Serial.print("--------------------------\n");// end-marker
 }
+
 //----------------------------------------------------------------------
 
 void setup() {
-  int i,j,a,b,last=2048,ave,e;
+  int i,j,a,ave,e;
   int sound=0,silcount=0;
-  float x=1.2345,y=3.456,z;
-  
+ 
   pinMode(inputPin, INPUT_ANALOG);
+  pinMode(PB12,OUTPUT); digitalWrite(PB12, HIGH);  // LED off
   
-  HID.begin(HID_KEYBOARD);
-  Keyboard.begin();
-  
-  //Serial.begin(115200); 
+  if (DEVMODE) Serial.begin(115200);
+  else {HID.begin(HID_KEYBOARD);  Keyboard.begin();}
   
   for(i=0; i<WINDOW; i++) window[i]=0.5-0.5*cos(2.0*M_PI*i/(WINDOW-1));
   rootsofunity(realtwiddle,imtwiddle,FFT);
@@ -222,30 +261,30 @@ void setup() {
         a = analogRead(inputPin); // read in the audio signal on PA0
         ave+=a;
       }
-      ave/=8;
+      ave/=8; ave-=2048;
+      if (ave>127) ave=127; if (ave<-127) ave=-127; // avoid clipping
       
-      b=ave-last; last=ave; // pre-emphasis
-      //Serial.println(b);
       
-      s[samples]=b; samples++;
+      //Serial.println(ave);
+      
+      s[samples]=ave; samples++;
       
       if (samples==200) { // check energy, reset if too low...
-        e=0; for (i=0; i<200; i++) e+=s[i]*s[i];
+       	e=0; for (i=1; i<200; i++) e+=abs(s[i]-s[i-1]);
         //Serial.println(e);
 
         // wait for high volume to being recording....
-        if (e<1000) {for (i=0,j=80; i<120; i++,j++) s[i]=s[j]; samples=120;}
+        if (e<300) {for (i=0,j=80; i<120; i++,j++) s[i]=s[j]; samples=120;}
       }
       if (samples>200 && samples%80==40) { // check energy again....
-         e=0; for (i=samples-200; i<samples; i++) e+=s[i]*s[i];
+         e=0; for (i=samples-199; i<samples; i++) e+=abs(s[i]-s[i-1]);
          //Serial.println(e); 
          // stop recording when volume drops below tolerance for 30 frames...
-         if (e<750) {samples-=80; silcount++;} else silcount=0;
+         if (e<200)  silcount++; else silcount=0;
       }
       
-      if (samples==10000 || silcount==30) { // dump audio now...
-        //for (i=0; i<samples; i++) {Serial.print(s[i]); Serial.print("\n");}
-        //Serial.print(65535); Serial.print("\n");// end-marker
+      if (samples==MAXSAMPLES || silcount==30) { // dump audio now...
+        samples-=30*80; // remove trailing stuff
         process();
         samples=0; silcount=0;       
       }
