@@ -1,8 +1,7 @@
 # Bluepill Voice Keyboard
 Low-end speech-to-text running on $3 of hardware (Bluepill board + electret mic)
 
--- 
-INTRO
+## INTRO
 Most modern speech recognition systems use multi-gigabyte 'deep learning'
 systems running on high end multi-core multi-gigahertz processsors. 
 
@@ -15,8 +14,7 @@ a microphone, running on the cheapest board available.
 The specs of the hardware create severe limitations. We have 20Kb RAM, 64K 
 flash storage for all the code and reference tables, no floating point support, so (emulated)  FP math has to be minimal for speed.
 
---
-HOW IT WORKS
+## HOW IT WORKS
 We sample up to 1 second of speech at a time, stored as 8-bit 8000 samples/sec.
 This is done by doing an analog read of pin A1 on the bluepill, that the
 output of the mic feeds into. Samples are maximum 12-bit resolution,
@@ -32,8 +30,7 @@ lookup tables. An example of this output shown in 'alphabet.txt' here.
 'run mode' is where the system properly acts as a keyboard when plugged in
 and generates relevant keystrokes.
 
---
-HARDWARE
+## HARDWARE
 
 Electret or MEMMS analog mic - The one I'm using is a MAX9812L-based, but MAX4466 should be OK.
 Search ebay/aliexpress for 'electret microphone' or 'mems microphone'.
@@ -59,8 +56,7 @@ FFT bins are log-power quantized to 4 bits. bottom and top FFT bins ignored.
 Basic  min-max 15-vector FFT-to-phoneme codebook used.
 then first-2-phonemes-to-keystroke codebook used.
 
---
-DEMO
+##DEMO
 
 Demo at:
 
