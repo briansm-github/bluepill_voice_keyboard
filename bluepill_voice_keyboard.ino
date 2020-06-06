@@ -4,23 +4,22 @@
 
 #define DEVMODE 1 // dev-mode enabled? 0 or 1.
 
-#define WINDOW 240
-#define N 80
-#define ORDER 10
-#define MAXSAMPLES 8000
+#define WINDOW 200 // 25ms analysis window (at 8000 samples/sec)
+#define N 80       // 10ms step size
+#define ORDER 10 // LPC order
+#define MAXSAMPLES 8000 // 1 second maximum sampling (RAM limited)
 
-#define FFT 32
-#define FF2 15    
+#define FFT 32 // size of Fourier transform
+#define FF2 15 // number of fft bins to analyse
 int bin[FF2]={16, 8,24, 4,20,12,28, 2,18,10,26, 6,22,14,30};
 
 const int inputPin = 0;  // analog input pin PA0
 int8_t s[MAXSAMPLES];  // audio sample buffer (roughly 1 second)
 int samples=0;
-float window[WINDOW],w[WINDOW],ave;
-float realtwiddle[16],imtwiddle[16];
-float R[ORDER+1];
-float k[ORDER+1];
-float a[ORDER+1];
+double window[WINDOW],w[WINDOW],ave;
+double realtwiddle[16],imtwiddle[16];
+double R[ORDER+1]; // autocorrelations  
+double a[ORDER+1]; // linear prediction values
 char buffer[100];
 int enabled=0;
 
@@ -30,14 +29,14 @@ HIDKeyboard Keyboard(HID);
 //----------------------------------------------------------------------------------
 
 void autocorrelate(
-  float Sn[],  /* frame of Nsam windowed speech samples */
-  float Rn[],  /* array of P+1 autocorrelation coefficients */
+  double Sn[],  /* frame of Nsam windowed speech samples */
+  double Rn[],  /* array of P+1 autocorrelation coefficients */
   int Nsam, /* number of windowed samples to use */
   int order /* order of LPC analysis */
 )
 {
   int i,j;  /* loop variables */
-  float x;
+  double x;
 
   for(j=0; j<order+1; j++) {
     x = 0.0;
@@ -51,12 +50,12 @@ void autocorrelate(
 //----------------------------------------------------------------------------
 // Levinson-Durbin function based on Speex 1.0.5 lpc.c....
 void wld(
-    float       * lpc, /*      [0...p-1] LPC coefficients      */
-    const float * ac,  /*  in: [0...p] autocorrelation values  */
+    double       * lpc, /*      [0...p-1] LPC coefficients      */
+    const double * ac,  /*  in: [0...p] autocorrelation values  */
     int p
     )
 {
-   int i, j;  float r, error = ac[0];
+   int i, j;  double r, error = ac[0];
 
    for (i = 0; i < p; i++) {
 
@@ -70,7 +69,7 @@ void wld(
        */
       lpc[i] = r;
       for (j = 0; j < i/2; j++) {
-         float tmp  = lpc[j];
+         double tmp  = lpc[j];
          lpc[j]     += r * lpc[i-1-j];
          lpc[i-1-j] += r * tmp;
       }
@@ -81,9 +80,10 @@ void wld(
 }
 
 //----------------------------------------------------------------------
-void rootsofunity(float *realtwiddle, float *imtwiddle, unsigned int size)
+// set up FFT twiddles....
+void rootsofunity(double *realtwiddle, double *imtwiddle, unsigned int size)
 {
-    float twopi = 6.28318530717959;
+    double twopi = 6.28318530717959;
     unsigned int n;
 
     for(n=1; n<(size>>1); n++)
@@ -94,10 +94,10 @@ void rootsofunity(float *realtwiddle, float *imtwiddle, unsigned int size)
 }
 
 //-----------------------------------------------------------------------
-void simple_fft(float *real, float *im, float *realtwiddle, float *imtwiddle, int size)
+void simple_fft(double *real, double *im, double *realtwiddle, double *imtwiddle, int size)
 {
     unsigned int even, odd, span, log=0, rootindex;    // indexes
-    float temp;
+    double temp;
     log=0;
     int i;
 
@@ -138,8 +138,8 @@ void simple_fft(float *real, float *im, float *realtwiddle, float *imtwiddle, in
 void process() {
   int i,n,b,c;
  
-  float real[FFT],imag[FFT];
-  float e;
+  double real[FFT],imag[FFT];
+  double e;
   int segments=1;
   int min,max;
   int f[FF2];
@@ -148,16 +148,18 @@ void process() {
   char dump[30];
   char output[100];
   int oplen=0;
-  int kscore[KEYS];
+  int kpos,klen,score,bestscore; // for keystroke scoring
 
    output[0]=0;
+   for (i=0; i<30; i++) dump[i]='_';
    printf("\n--------------------\n\n");
    printf("segment %i\n",segments);
+   if (samples>N*30) samples=N*30; // only consider first 30 frames? 
    
    for (n=0; n<samples-WINDOW; n+=N) {
-     for (i=0; i<WINDOW; i++) w[i]=(float)s[i+n];
-     // run de-emphasis over the window area....
-     for (i=WINDOW-1; i>0; i--)  w[i]=w[i]-w[i-1]*0.975;
+     for (i=0; i<WINDOW; i++) w[i]=(double)s[i+n];
+     w[0]=0; for (i=1; i<WINDOW; i++) w[i]+=w[i-1]; // undo 1.0 pre-emph
+     for (i=WINDOW-1; i>0; i--) w[i]-=w[i-1]*0.9375; // 15/16 pre-emph
      // remove average....
      ave=0; for (i=0; i<WINDOW; i++) ave+=w[i]; ave/=WINDOW;
      for (i=0; i<WINDOW; i++) w[i]-=ave;
@@ -166,7 +168,6 @@ void process() {
      autocorrelate(w,R,WINDOW,ORDER);
      wld(&a[1],R,ORDER); a[0]=1.0;
      e=0;for(i=0; i<=ORDER; i++) e+=a[i]*R[i]; if (e<0) e=0;
-     e=powf(e,0.16666666);
      for (i=0; i<FFT; i++) {real[i]=0; imag[i]=0;}
      for (i=0; i<=ORDER; i++) real[i]=a[i];
      simple_fft(real,imag,realtwiddle,imtwiddle,FFT);
@@ -178,8 +179,10 @@ void process() {
 	      if (f[i]<0) f[i]=0;
               if (f[i]>15) f[i]=15;	      
      }
-     Serial.print(e); Serial.print("  ");
-     if (e<2.0) for (i=0; i<FF2; i++) f[i]=0; // ignore quiet frames
+     //Serial.print(e);
+     Serial.print("  ");
+     
+     if (e<100) for (i=0; i<FF2; i++) f[i]=0; // ignore quiet frames
  
     // search codebook for closest match(es)...
     bestdist=99999999; matches=0;
@@ -195,6 +198,8 @@ void process() {
          result[matches]=cb[c][FF2]; matches++; result[matches]=0;
          // next line prohibits plosives appearing after the first 3 frames...
          if (n>N*5) if (cb[c][FF2]=='b' || cb[c][FF2]=='d' || cb[c][FF2]=='t') {matches--; result[matches]=0;}
+         // next line gives 'n' sound privilige....
+         if (cb[c][FF2]=='n') {matches=1; result[0]='n';}
       }
       if (dist<bestdist) {bestdist=dist; best=c;}
     }
@@ -203,38 +208,48 @@ void process() {
     if (matches==1 ) {output[oplen]=result[0]; oplen++; output[oplen]=0;}
     if (oplen>1) if (output[oplen-2]==output[oplen-1]) {oplen--; output[oplen]=0;}
      
-    for (i=0; i<FF2; i++) if (f[i]<10) dump[i]=f[i]+'0'; else dump[i]=f[i]-10+'a';
-    dump[15]=0;
+    for (i=0; i<FF2; i++) if (f[i]<10) dump[i+i/4]=f[i]+'0'; else dump[i+i/4]=f[i]-10+'a';
+    dump[18]=0;
     if (DEVMODE) {
       Serial.print(dump); Serial.print("  ");
       Serial.print(result); Serial.print("   "); Serial.print(bestdist);
+      Serial.print("  r="); Serial.print(cb[best][16]);
       Serial.print("\n");
     }
   }
-  // print output hits sequence....
+
+  // print output phoneme-hits sequence....
   Serial.print(output); Serial.print("\n");
-  
-  // generate a score for each keystroke possibility...
-  for (i=0; i<KEYS; i++) {
-    kscore[i]=0;
-    for (n=0; n<oplen; n++) if (output[n]!=cbp[i][0]) kscore[i]--;
-    else {kscore[i]+=50; for (n++; n<oplen; n++) if (output[n]==cbp[i][1]) {kscore[i]+=50; n+=10;} else kscore[i]-=5;}
-    if (cbp[i][1]!=0 && kscore[i]<80) kscore[i]=0; 
-    if (cbp[i][1]==0 && kscore[i]>0) kscore[i]+=30; // balance up single-phoneme items
+
+  // search for best keystroke possibility...
+  bestscore=0; best='?';  klen=cbk[0]; kpos=1;
+  while(klen!=0) {
+    score=0; i=0; n=0;
+    while(n<oplen) {
+       if (output[n]==cbk[kpos]) {
+          score+=10; kpos++; i++;
+          if (i==klen) {n=oplen-1; if (score>bestscore) {bestscore=score; best=cbk[kpos];}}
+       }
+       else score--;
+       n++; if (n==oplen) kpos-=i; // after over-run of output buffer, rewind kpos
+    }
+    kpos+=klen+1; klen=cbk[kpos]; kpos++; // move to next entry in cbk
   }
-  d=-100; for (i=0; i<KEYS; i++) if (kscore[i]>d) {d=kscore[i]; best=i;}
-  if (cbp[best][2]>2) {output[0]=cbp[best][2]; output[1]=0;}
-  else if (cbp[best][2]==0) {output[0]='o'; output[1]='f'; output[2]='f'; output[3]=0;}
-  else if (cbp[best][2]==1) {output[0]='o'; output[1]='n'; output[2]=0;}
+ 
+  if (best>2 && best!=32) {output[0]=best; output[1]=0;}
+  else if (best==0) {output[0]='o'; output[1]='f'; output[2]='f'; output[3]=0;}
+  else if (best==1) {output[0]='o'; output[1]='n'; output[2]=0;}
+  else if (best==32) {output[0]='_'; output[1]=0;}
   if (DEVMODE) Serial.print(output); Serial.print("\n");
 
   
-  // lastly, generate keystroke based on pho1/pho2....
+  // lastly, generate keystroke (or switch keystroke generation off/on)
   if (!DEVMODE) {
-    if (cbp[best][2]==1) {enabled=1; digitalWrite(PB12, LOW);}
-    else if (cbp[best][2]==0) {enabled=0; digitalWrite(PB12, HIGH);}
-    else if (enabled) Keyboard.write(cbp[best][2]);
+    if (best==1) {enabled=1; digitalWrite(PB12, LOW);}
+    else if (best==0) {enabled=0; digitalWrite(PB12, HIGH);}
+    else if (enabled && best!='?') Keyboard.write(best);
   }    
+
   
   if (DEVMODE) Serial.print("--------------------------\n");// end-marker
 }
@@ -242,7 +257,7 @@ void process() {
 //----------------------------------------------------------------------
 
 void setup() {
-  int i,j,a,ave,e;
+  int i,j,a,b,ave,e,last=0;
   int sound=0,silcount=0;
  
   pinMode(inputPin, INPUT_ANALOG);
@@ -256,37 +271,40 @@ void setup() {
 
   while(1) {
       ave=0;
-      for (i=0; i<8; i++) {
+      for (i=0; i<8; i++) { // read  8 samples and take average value
         delayMicroseconds(7);          // higher=higher pitch
         a = analogRead(inputPin); // read in the audio signal on PA0
-        ave+=a;
+        a-=2048;  ave+=a; // 12-bit sample with 11-bit (2048) bias
       }
-      ave/=8; ave-=2048;
-      if (ave>127) ave=127; if (ave<-127) ave=-127; // avoid clipping
+      ave/=8; 
       
-      
+      if (ave-last>127) ave=last+127;  // lowpass + avoid clipping.
+      if (ave-last<-127) ave=last-127; 
+    
+      b=ave-last; last=ave;
+    
       //Serial.println(ave);
       
-      s[samples]=ave; samples++;
+      s[samples]=b; samples++;
       
-      if (samples==200) { // check energy, reset if too low...
-       	e=0; for (i=1; i<200; i++) e+=abs(s[i]-s[i-1]);
+      if (samples==WINDOW) { // check energy, reset if too low...
+       	e=0; for (i=1; i<WINDOW; i++) e+=abs(s[i]);
         //Serial.println(e);
 
         // wait for high volume to being recording....
-        if (e<300) {for (i=0,j=80; i<120; i++,j++) s[i]=s[j]; samples=120;}
+        if (e<1000) {for (i=0,j=80; i<120; i++,j++) s[i]=s[j]; samples=120;}
       }
-      if (samples>200 && samples%80==40) { // check energy again....
-         e=0; for (i=samples-199; i<samples; i++) e+=abs(s[i]-s[i-1]);
+      if (samples>WINDOW && samples%N==40) { // check energy again....
+         e=0; for (i=samples-199; i<samples; i++) e+=abs(s[i]);
          //Serial.println(e); 
          // stop recording when volume drops below tolerance for 30 frames...
-         if (e<200)  silcount++; else silcount=0;
+         if (e<400)  silcount++; else silcount=0;
       }
       
       if (samples==MAXSAMPLES || silcount==30) { // dump audio now...
         samples-=30*80; // remove trailing stuff
         process();
-        samples=0; silcount=0;       
+        samples=0; silcount=0;
       }
   }
 }
