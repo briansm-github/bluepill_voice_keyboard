@@ -1,7 +1,7 @@
 # Bluepill Voice Keyboard
 Low-end speech-to-text running on $3 of hardware (Bluepill board + electret mic)
 
-[hardware][https://github.com/briansm-github/bluepill_voice_keyboard/bluepill_voice_keyboard.jpg]
+![picture](https://raw.githubusercontent.com/briansm-github/bluepill_voice_keyboard/master/bluepill_voice_keyboard.jpg)
 
 ## INTRO
 Most modern speech recognition systems use multi-gigabyte 'deep learning'
