@@ -1,6 +1,8 @@
 # Bluepill Voice Keyboard
 Low-end speech-to-text running on $3 of hardware (Bluepill board + electret mic)
 
+[hardware][https://github.com/briansm-github/bluepill_voice_keyboard/bluepill_voice_keyboard.jpg]
+
 ## INTRO
 Most modern speech recognition systems use multi-gigabyte 'deep learning'
 systems running on high end multi-core multi-gigahertz processsors. 
@@ -56,7 +58,7 @@ FFT bins are log-power quantized to 4 bits. bottom and top FFT bins ignored.
 Basic  min-max 15-vector FFT-to-phoneme codebook used.
 then first-2-phonemes-to-keystroke codebook used.
 
-##DEMO
+## DEMO
 
 Demo at:
 
