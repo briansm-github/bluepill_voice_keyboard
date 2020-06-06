@@ -35,7 +35,7 @@ and generates relevant keystrokes.
 
 ## HARDWARE
 
-Electret or MEMMS analog mic - The one I'm using is a MAX9812L-based, but MAX4466 should be OK.
+Electret or MEMS analog mic - The one I'm using is a MAX9812L-based, but MAX4466 should be OK.
 Search ebay/aliexpress for 'electret microphone' or 'mems microphone'.
 Boards can be found for around $1.50.
 
